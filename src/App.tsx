@@ -1,157 +1,98 @@
+import { useEffect, useMemo, useState } from "react";
 import "./styles.css";
+import type { Calibration, ExamRecord } from "./domain/types";
+import { deviceStatus, latestCalibrationByDevice } from "./domain/rules";
+import { loadCalibrations, loadExams, saveCalibrations, saveExams } from "./domain/storage";
+import { isSameDay } from "./domain/format";
+import { CalibrationForm } from "./components/CalibrationForm";
+import { DeviceStatusBoard } from "./components/DeviceStatusBoard";
+import { ExamDesk } from "./components/ExamDesk";
+import { RecordList } from "./components/RecordList";
 
-const project = {
-  "id": "hxwl-11",
-  "port": 5111,
-  "title": "眼科验光记录",
-  "subtitle": "视力、屈光参数与复查处方对比",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#2563eb",
-    "#059669",
-    "#dc2626"
-  ],
-  "domain": "眼视光",
-  "users": [
-    "验光师",
-    "门店顾问",
-    "复查医生"
-  ],
-  "metrics": [
-    "近视进展",
-    "散光变化",
-    "复查提醒",
-    "处方数量"
-  ],
-  "filters": [
-    "儿童",
-    "成人",
-    "渐进片",
-    "角膜塑形镜"
-  ],
-  "fields": [
-    "裸眼视力",
-    "矫正视力",
-    "球镜",
-    "柱镜",
-    "轴位",
-    "瞳距",
-    "角膜曲率"
-  ],
-  "records": [
-    [
-      "Patient-032",
-      "儿童近视",
-      "复查",
-      "右眼-2.75DS，轴位180"
-    ],
-    [
-      "Patient-081",
-      "渐进片",
-      "初配",
-      "ADD +1.50，瞳高待确认"
-    ],
-    [
-      "Patient-144",
-      "散光",
-      "复查",
-      "柱镜变化0.50D"
-    ]
-  ]
-};
+const newId = (prefix: string) =>
+  `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
-const statusColors = ["status-ok", "status-watch", "status-danger"];
-
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
-  return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
-    </article>
-  );
-}
+const metricColors = ["status-info", "status-ok", "status-danger", "status-info"];
 
 function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+  const [calibrations, setCalibrations] = useState<Calibration[]>(loadCalibrations);
+  const [exams, setExams] = useState<ExamRecord[]>(loadExams);
+  const [now, setNow] = useState(() => Date.now());
+
+  // 本地留档：任何变更立即写入 localStorage，重开页面数据仍在
+  useEffect(() => saveCalibrations(calibrations), [calibrations]);
+  useEffect(() => saveExams(exams), [exams]);
+
+  // 每 30 秒刷新当前时间，让校准两小时有效期自动失效
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const deviceIds = useMemo(
+    () => [...latestCalibrationByDevice(calibrations).keys()],
+    [calibrations]
+  );
+
+  const metrics = [
+    {
+      label: "今日校准",
+      value: calibrations.filter((c) => isSameDay(c.calibratedAt, now)).length,
+    },
+    {
+      label: "放行设备",
+      value: deviceIds.filter((id) => deviceStatus(id, calibrations) === "released").length,
+    },
+    {
+      label: "停用设备",
+      value: deviceIds.filter((id) => deviceStatus(id, calibrations) === "suspended").length,
+    },
+    { label: "验光记录", value: exams.length },
+  ];
+
+  const addCalibration = (data: Omit<Calibration, "id">) =>
+    setCalibrations((prev) => [...prev, { ...data, id: newId("cal") }]);
+
+  const addExam = (data: Omit<ExamRecord, "id">) =>
+    setExams((prev) => [...prev, { ...data, id: newId("exam") }]);
 
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
-          <h1>{project.title}</h1>
-          <p className="subtitle">{project.subtitle}</p>
+          <p className="eyebrow">hxwl-11 · 设备放行台</p>
+          <h1>眼科验光记录</h1>
+          <p className="subtitle">
+            开工先用标准片校准验光仪，放行状态与顾客验光联动：偏差超限的设备自动停用、不能接新顾客，
+            校准超过两小时或未通过检查时，验光只能保留草稿。
+          </p>
         </div>
         <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+          <span>放行规则</span>
+          <strong>
+            标准片球镜 / 柱镜任一偏差超过 0.12D 即停用，修好并重新校准通过后恢复；校准两小时内有效。
+          </strong>
         </div>
       </section>
 
       <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
+        {metrics.map((metric, index) => (
+          <article className="metric-card" key={metric.label}>
+            <span>{metric.label}</span>
+            <strong>{metric.value}</strong>
+            <i className={metricColors[index % metricColors.length]} />
+          </article>
         ))}
       </section>
 
       <section className="workspace">
-        <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
-            ))}
-          </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
-            </div>
-            <button className="primary-action">新增记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
+        <CalibrationForm onAdd={addCalibration} />
+        <DeviceStatusBoard calibrations={calibrations} now={now} />
       </section>
 
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
+      <section className="workspace">
+        <ExamDesk calibrations={calibrations} now={now} onSave={addExam} />
+        <RecordList exams={exams} />
       </section>
     </main>
   );
